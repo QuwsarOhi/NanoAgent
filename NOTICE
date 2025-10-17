@@ -1,0 +1,15 @@
+NanoAgent — A lightweight agentic LLM project
+
+This product includes software and model components developed under the Apache License 2.0.
+
+This model was trained on third-party datasets under the following licenses:
+- Community Data License Agreement – Permissive, Version 2.0
+- MIT License
+- Creative Commons Attribution 4.0 International (CC-BY 4.0)
+- Open Data Commons Attribution (ODC-BY)
+- Apache License 2.0
+
+The original datasets are not redistributed with this model.
+Their licensors do not endorse this project or its outputs.
+
+You must comply with the terms of these third-party licenses when using or distributing this model.
