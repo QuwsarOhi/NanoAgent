@@ -29,7 +29,7 @@ It’s small enough (~135 MB in 8-bit) to run on **edge devices** like personal 
 ## 🧪 Training Overview
 
 - **Base model**: [`SmolLM2-135M-Instruct`](https://huggingface.co/HuggingFaceTB/SmolLM2-135M-Instruct)  
-- **Fine-tuning method**: [Dynamic Fine-Tuning (DFT)](https://github.com/yongliang-wu/DFT/tree/master)  
+- **Fine-tuning method**: ~~[Dynamic Fine-Tuning (DFT)](https://github.com/yongliang-wu/DFT/tree/master)~~ Supervised Fine-Tuning
 - **Platform**: Apple Mac M1 (16 GB) — MLX framework
 
 ### 📚 Datasets Used
@@ -73,7 +73,7 @@ Each dataset retains its original license, and use of those datasets is subject 
 | 🧰 **Tool Call Tasks**             | ❌ Not Supported        | ✅ Supported                      |
 | 🧭 **Instruction Following**       | 🟡 Moderate             | 🟢 Improved                       |
 | 🧠 **Reasoning (Light)**          | 🟡 Moderate             | 🟡 Moderate                       |
-| 📝 **Training Method**            | Baseline (SFT)          | DFT + Agentic Finetuning         |
+| 📝 **Training Method**            | Baseline (SFT)          | SFT + Agentic Finetuning         |
 | 🧪 **Strength**                   | Instruction following   | Tool call ability + structured outputs |
 | ⚠️ **Limitations**               | No tool calling         | Occasional tool errors, still beta |
 
