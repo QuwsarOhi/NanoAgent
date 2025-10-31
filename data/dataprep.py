@@ -922,7 +922,7 @@ if __name__ == "__main__":
         context_len=CONTEXT_LEN,
         tokenizer=tokenizer,
         tool_template=TOOL_TEMPLATE,
-        dedupe_threshold=1.0,
+        dedupe_threshold=0.999,
         seed=123,
         pack=False,
     )
@@ -939,6 +939,6 @@ if __name__ == "__main__":
     for stage, dataset in [("train", train_ds), ("test", test_ds)]:
         source_dist(dataset)
         print(f"Total {stage} dataset length:", len(dataset), flush=True)
-        save_path = f"data/datasets/Smollm2_base_{stage}_v11.jsonl"
+        save_path = f"data/datasets/Smollm2_base_{stage}_v12.jsonl"
         print("Save path:", save_path, flush=True)
         dataset.to_json(save_path, orient="records")

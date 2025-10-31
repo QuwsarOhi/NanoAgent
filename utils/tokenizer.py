@@ -27,7 +27,7 @@ CHAT_TEMPLATE = {}
 
 CHAT_TEMPLATE['HuggingFaceTB'] = """{% for message in messages %}
 {% if loop.first and messages[0]['role'] != 'system' %}
-{{ '<|im_start|>system\nYou are a helpful AI assistant. Always provide concise answers. <|im_end|>' }}
+{{ '<|im_start|>system\nYou are a helpful AI assistant. <|im_end|>' }}
 {% endif %}
 {{'<|im_start|>' + message['role'] + '\n' + message['content'] + '<|im_end|>'}}
 {% endfor %}

@@ -71,8 +71,8 @@ if TrainConfig.LOAD_PREV:
     assert TrainConfig.GENERATE_DATA is False
 
 # The model that will be trained
-# MODEL_PATH = "quwsarohi/NanoAgent-mlx"
-MODEL_PATH = "weights/SmolLM2-135M-mlx-cdft-v10"
+MODEL_PATH = "quwsarohi/NanoAgent-mlx"
+# MODEL_PATH = "weights/SmolLM2-135M-mlx-cdft-v10"
 
 model = load(MODEL_PATH)[0]
 model.train()

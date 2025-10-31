@@ -27,18 +27,16 @@ class TrainConfig:
     # Base model config
     SIZE = "135M"
     VERSION = "instruct"
-    TRAIN_TYPE = "dft"
+    TRAIN_TYPE = "sft"
     # Iterations
-    EPOCHS = 2
+    EPOCHS = 3.1
     BATCH_SIZE = 1
     CONTEXT_LEN = 1024 * 2
     # Weight checkpoint
-    LOAD_PREV = False
+    LOAD_PREV = True
     # Learning rate
     MIN_LEARNING_RATE = 0  # 5e-8
-    BASE_LEARNING_RATE = 1e-6  # 5e-5
-    WARMUP_STEPS = 500
-    DECAY_STEPS = 500
+    WARMUP_STEPS = int(0.1 * 74959) #500
     # SQRT Scaling rule: lr_new = lr * batch_scale = 3e-3 * sqrt(1/128) = ~2.5e-04
     # Ref:
     # * On the SDEs and Scaling Rules for Adaptive Gradient Algorithms
@@ -49,7 +47,7 @@ class TrainConfig:
     WEIGHT_DECAY = 0.1
 
     TRAIN_LABEL = ("c" if VERSION == "instruct" else "") + TRAIN_TYPE
-    SAVE_PATH = f"weights/SmolLM2-{SIZE}-mlx-{TRAIN_LABEL}-v11"
+    SAVE_PATH = f"weights/SmolLM2-{SIZE}-mlx-{TRAIN_LABEL}-v12"
 
 
 config_dict = {
@@ -65,7 +63,8 @@ assert TrainConfig.TRAIN_TYPE in ["sft", "dft"]
 # convert(hf_path=hf_path, mlx_path=f'weights/SmolLM2-{TrainConfig.SIZE}-mlx-instruct')
 
 # model_base = load(f"weights/SmolLM2-{SIZE}-mlx-{VERSION}")[0].freeze().eval()
-model, tokenizer = load(f"weights/SmolLM2-{TrainConfig.SIZE}-mlx-{TrainConfig.VERSION}")
+model_path = f"weights/SmolLM2-{TrainConfig.SIZE}-mlx-{TrainConfig.VERSION}"
+model, tokenizer = load(model_path)
 print(f"Model path: weights/SmolLM2-{TrainConfig.SIZE}-mlx-{TrainConfig.VERSION}")
 # model.generation_config.pad_token_id = tokenizer.pad_token_id
 # model.generation_config.eos_token_id = tokenizer.eos_token_id
@@ -259,12 +258,12 @@ def source_dist(dataset):
 
 train_ds = load_dataset(
     "json",
-    data_files="data/datasets/SmolLM2_base_train_v11.jsonl",
+    data_files="data/datasets/SmolLM2_base_train_v12.jsonl",
     split="train",
 )
 test_ds = load_dataset(
     "json",
-    data_files="data/datasets/SmolLM2_base_test_v11.jsonl",
+    data_files="data/datasets/SmolLM2_base_test_v12.jsonl",
     split="train",
 )
 # dataset = dataset.sort('ctx_len')
@@ -293,11 +292,9 @@ eval_dataset = Dataset(
 
 
 def cosine_decay_with_warmup(
-    base_lr: float,
     max_lr: float,
     total_steps: int,
     warmup_steps: int,
-    decay_steps: int,
     min_lr: float = 0.0,
 ):
     def schedule(step):
@@ -307,25 +304,20 @@ def cosine_decay_with_warmup(
         progress = (step - warmup_steps) / (total_steps - warmup_steps)
         cosine_decay = 0.5 * (1 + mx.cos(mx.pi * progress))
         cosine_decay = (max_lr - min_lr) * cosine_decay + min_lr
-        cosine_decay = mx.maximum(cosine_decay, base_lr)  # min cap of cosine decay
-        # Linear decay
-        decay_lr = base_lr * (step - (total_steps - decay_steps)) / decay_steps
         return mx.where(
             step < warmup_steps,
             linear_warmup,
-            mx.where(step >= (total_steps - decay_steps), decay_lr, cosine_decay),
+            cosine_decay
         )
 
     return schedule
 
 
 scheduler = cosine_decay_with_warmup(
-    base_lr=TrainConfig.BASE_LEARNING_RATE,
     max_lr=TrainConfig.MAX_LEARNING_RATE,
     min_lr=TrainConfig.MIN_LEARNING_RATE,
     total_steps=int(len(dataset) * TrainConfig.EPOCHS) // TrainConfig.BATCH_SIZE,
     warmup_steps=TrainConfig.WARMUP_STEPS,
-    decay_steps=TrainConfig.DECAY_STEPS,
 )
 
 optimizer = optim.AdamW(
@@ -366,108 +358,6 @@ def get_batch(dataset, idx=1, batch_size=1):
 # print(inp)
 # print('-+'*20)
 # print(tar)
-
-
-def inference():
-    MONGO_CRUD = """<div id="std-label-crud"></div>
-
-# MongoDB CRUD Operations
-
-CRUD operations *create*, *read*, *update*, and *delete*
-[documents](https://mongodb.com/docs/manual/core/document/#std-label-bson-document-format).
-
-You can connect with driver methods and perform CRUD operations for deployments hosted in the following environments:
-
-[perform CRUD operations in the UI](https://www.mongodb.com/docs/atlas/atlas-ui/documents/)You can [perform CRUD operations in the UI](https://www.mongodb.com/docs/atlas/atlas-ui/documents/) for deployments hosted in [MongoDB Atlas](https://www.mongodb.com/docs/atlas).
-
-## Create Operations
-
-Create or insert operations add new [documents](https://mongodb.com/docs/manual/core/document/#std-label-bson-document-format) to a [collection](https://mongodb.com/docs/manual/core/databases-and-collections/#std-label-collections). If the collection does not currently exist, insert operations will create the collection.
-
-MongoDB provides the following methods to insert documents into a collection:
-
-- [`db.collection.insertOne()`](https://mongodb.com/docs/manual/reference/method/db.collection.insertOne/#mongodb-method-db.collection.insertOne)
-
-- [`db.collection.insertMany()`](https://mongodb.com/docs/manual/reference/method/db.collection.insertMany/#mongodb-method-db.collection.insertMany)
-
-In MongoDB, insert operations target a single [collection](https://mongodb.com/docs/manual/reference/glossary/#std-term-collection). All write operations in MongoDB are [atomic](https://mongodb.com/docs/manual/core/write-operations-atomicity/) on the level of a single [document](https://mongodb.com/docs/manual/core/document/#std-label-bson-document-format).
-
-For examples, see [Insert Documents](https://mongodb.com/docs/manual/tutorial/insert-documents/).
-
-<div id="std-label-crud-read-operations"></div>
-
-## Read Operations
-
-Read operations retrieve [documents](https://mongodb.com/docs/manual/core/document/#std-label-bson-document-format) from a [collection](https://mongodb.com/docs/manual/core/databases-and-collections/#std-label-collections); i.e. query a collection for documents. MongoDB provides the following methods to read documents from a collection:
-
-- [`db.collection.find()`](https://mongodb.com/docs/manual/reference/method/db.collection.find/#mongodb-method-db.collection.find)
-
-You can specify [query filters or criteria](https://mongodb.com/docs/manual/tutorial/query-documents/#std-label-read-operations-query-argument) that identify the documents to return.
-
-For examples, see:
-
-- [Query Documents](https://mongodb.com/docs/manual/tutorial/query-documents/)
-
-- [Query on Embedded/Nested Documents](https://mongodb.com/docs/manual/tutorial/query-embedded-documents/)
-
-- [Query an Array](https://mongodb.com/docs/manual/tutorial/query-arrays/)
-
-- [Query an Array of Embedded Documents](https://mongodb.com/docs/manual/tutorial/query-array-of-documents/)
-
-## Update Operations
-
-Update operations modify existing [documents](https://mongodb.com/docs/manual/core/document/#std-label-bson-document-format) in a [collection](https://mongodb.com/docs/manual/core/databases-and-collections/#std-label-collections). MongoDB provides the following methods to update documents of a collection:
-
-- [`db.collection.updateOne()`](https://mongodb.com/docs/manual/reference/method/db.collection.updateOne/#mongodb-method-db.collection.updateOne)
-
-- [`db.collection.updateMany()`](https://mongodb.com/docs/manual/reference/method/db.collection.updateMany/#mongodb-method-db.collection.updateMany)
-
-- [`db.collection.replaceOne()`](https://mongodb.com/docs/manual/reference/method/db.collection.replaceOne/#mongodb-method-db.collection.replaceOne)
-
-In MongoDB, update operations target a single collection. All write operations in MongoDB are [atomic](https://mongodb.com/docs/manual/core/write-operations-atomicity/) on the level of a single document.
-
-You can specify criteria, or filters, that identify the documents to update. These [filters](https://mongodb.com/docs/manual/core/document/#std-label-document-query-filter) use the same syntax as read operations.
-
-For examples, see [Update Documents](https://mongodb.com/docs/manual/tutorial/update-documents/).
-
-## Delete Operations
-
-Delete operations remove documents from a collection. MongoDB provides the following methods to delete documents of a collection:
-
-- [`db.collection.deleteOne()`](https://mongodb.com/docs/manual/reference/method/db.collection.deleteOne/#mongodb-method-db.collection.deleteOne)
-
-- [`db.collection.deleteMany()`](https://mongodb.com/docs/manual/reference/method/db.collection.deleteMany/#mongodb-method-db.collection.deleteMany)
-
-In MongoDB, delete operations target a single [collection](https://mongodb.com/docs/manual/reference/glossary/#std-term-collection). All write operations in MongoDB are [atomic](https://mongodb.com/docs/manual/core/write-operations-atomicity/) on the level of a single document.
-
-You can specify criteria, or filters, that identify the documents to remove. These [filters](https://mongodb.com/docs/manual/core/document/#std-label-document-query-filter) use the same syntax as read operations.
-
-For examples, see [Delete Documents](https://mongodb.com/docs/manual/tutorial/remove-documents/).
-
-## Bulk Write
-
-MongoDB provides the ability to perform write operations in bulk. For details, see [Bulk Write Operations](https://mongodb.com/docs/manual/core/bulk-write-operations/)."""
-
-    rag_prompt = [
-        {
-            "role": "user",
-            "content": f"Source:\n{MONGO_CRUD}\n\n\nQuestion: How does CRUD work in Mongo? Which functions to use for CRUD?",
-        }
-    ]
-    prompt = tokenizer.apply_chat_template(
-        rag_prompt,
-        tokenize=False,
-        add_generation_prompt=True,
-    )
-    response = generate(
-        model,
-        tokenizer,
-        prompt=prompt,
-        max_tokens=386,
-        verbose=False,
-    )
-    return {"prompt": prompt, "response": response}
-
 
 def save_state(
     iter_step,
@@ -569,7 +459,6 @@ def cal_loss(model, x, y, weights, evaluate=False):
 
     total_toks = mx.maximum(weights.sum(), 1e-7)
     dft_loss_mean = (tok_loss * probs_at_labels * weights).sum() / total_toks
-    # ce_loss = (tok_loss * weights).sum() / total_toks
 
     if not evaluate:
         if TrainConfig.TRAIN_TYPE == "dft":
@@ -585,8 +474,6 @@ def cal_loss(model, x, y, weights, evaluate=False):
             "loss_dft": dft_loss_mean,
             "prob_avg": (probs_at_labels * weights).sum() / total_toks,
             "loss": ce_loss,
-            # Comparing the logit distribution difference of trained model w.r.t. base model
-            # 'kl_diff': (nn.losses.kl_div_loss(inputs=mx.softmax(logits, axis=-1), targets=mx.softmax(model_base(x), axis=-1), reduction='none') * weights).sum() / total_toks
         }
 
 
@@ -636,7 +523,6 @@ if itr_start == 0:
         "train_loss": 0.0,
         "eval_metric": eval_loss,
         "lr": optimizer.learning_rate.item(),
-        **inference(),
     }
 
 mx.eval(state)
@@ -662,7 +548,6 @@ for itr in tqdm_data:
                 "train_loss": win_loss / seen_tokens,
                 "eval_metric": eval_loss,
                 "lr": optimizer.learning_rate.item(),
-                **inference(),
             }
             save_state(
                 iter_step=itr + 1,
