@@ -3,6 +3,7 @@
 NanoAgent is a **135M parameter**, **8k context length**, open-source language model designed for **agentic tasks** such as **tool calling**, **instruction following**, and **lightweight reasoning**.  
 It’s small enough (~135 MB in 8-bit) to run on **edge devices** like personal laptops, low-memory CPUs, and even wearables — yet smart enough to make tool calls, parse web information, and give structured answers.
 
+Quick inference resource: [here](notebooks/inference.ipynb)
 
 ## 🌍 Real-World Use Cases
 
