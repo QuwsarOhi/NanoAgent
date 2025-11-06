@@ -87,6 +87,34 @@ Each dataset retains its original license, and use of those datasets is subject 
 - [ ] 🧪 Evaluate multi-turn tool chaining  
 - [ ] 🧹 Further refine datasets for stability
 
+
+## Directory Tree
+
+```
+NanoAgent/
+├── data/
+│   ├── dataprep.py          # Dataset preparation, cleaning, and formatting
+│   └── utils.py             # Helper utilities for data processing
+│
+├── grpo/
+│   └── grpo-mlx.py          # Experimental GRPO (agentic fine-tuning) implementation using MLX
+│
+├── notebooks/
+│   └── inference.ipynb      # Demo notebook for inference and evaluation
+│
+├── sft/
+│   └── train-mlx.py         # Supervised Fine-Tuning (SFT) training script using MLX
+│
+├── utils/
+│   ├── gguf_conv.py         # Conversion script for exporting model to GGUF format (for llama.cpp etc.)
+│   ├── tokenizer.py         # Tokenizer helper functions and configs
+│   └── webtool.py           # Example tool interface for web search / parsing integration
+│
+├── LICENSE                  # Apache 2.0 license file
+├── NOTICE                   # Notices and attributions for datasets and dependencies
+└── README.md                # Project overview, usage guide, and dataset details
+```
+
 ---
 
 ## 📄 License
