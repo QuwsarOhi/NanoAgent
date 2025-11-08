@@ -5,6 +5,8 @@ It’s small enough (~135 MB in 8-bit) to run on **edge devices** like personal 
 
 Quick inference resource: [here](notebooks/inference.ipynb)
 
+Run in Ollama: `ollama run quwsarohi/NanoAgent`
+
 ## 🌍 Real-World Use Cases
 
 - 🕹️ **Runs on edge devices** — laptops, smartwatches, browsers, or CPU-only environments.  
