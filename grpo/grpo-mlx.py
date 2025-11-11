@@ -4,6 +4,7 @@
 import copy
 import json
 import os
+import re
 import random
 import sys
 import time
@@ -39,19 +40,19 @@ from utils.webtool import tool_call_extract
 @dataclass
 class TrainConfig:
     # Iterations
-    ITERS = 19321
+    ITERS = 20000
     GENERATE_DATA = False
     BATCH_SIZE = 1
-    GEN_LEN = 128  # 64 * 2
+    GEN_LEN = 384
     SAVE_FREQ = 50
     # Weight checkpoint
-    LOAD_PREV = False
+    LOAD_PREV = True
     # Learning rate
     LEARNING_RATE = 5e-6
     WEIGHT_DECAY = 0.0
     EPSILON = 0.2
     GROUP_SIZE = 6
-    WARMUP_STEPS = int(19321 * 0.1)
+    WARMUP_STEPS = int(ITERS * 0.1)
     BETA = 0.04
     UPDATE_FREQ = 10
     MAX_INPUT_LEN = 384
@@ -71,8 +72,7 @@ if TrainConfig.LOAD_PREV:
     assert TrainConfig.GENERATE_DATA is False
 
 # The model that will be trained
-MODEL_PATH = "quwsarohi/NanoAgent-mlx"
-# MODEL_PATH = "weights/SmolLM2-135M-mlx-cdft-v10"
+MODEL_PATH = "weights/NanoAgent-135M"
 
 model = load(MODEL_PATH)[0]
 model.train()
@@ -88,26 +88,6 @@ else:
     model_ref = None
 
 tokenizer = get_tokenizer("HuggingFaceTB/SmolLM2-135M", add_bos=False)
-
-
-def linear_decay_with_warmup(
-    base_lr: float,
-    warmup_steps: int,
-    min_lr: float = 0.0,
-):
-    def schedule(step):
-        # Linear warmup
-        warmup_lr = base_lr * step / warmup_steps
-        # Linear decay
-
-        return mx.where(step < warmup_steps, warmup_lr, base_lr)
-
-    return schedule
-
-
-# scheduler = linear_decay_with_warmup(
-#     base_lr=TrainConfig.LEARNING_RATE, warmup_steps=TrainConfig.WARMUP_STEPS
-# )
 
 def cosine_decay_with_warmup(
     max_lr: float,
@@ -140,11 +120,6 @@ optimizer = optim.AdamW(
     learning_rate=scheduler, betas=[0.9, 0.99], weight_decay=TrainConfig.WEIGHT_DECAY
 )
 
-print(
-    f"Memory consumption: {mx.get_active_memory() / 1024 / 1024:.2f} | {mx.get_peak_memory() / 1024 / 1024:.2f} Megabytes"
-)
-
-
 def grad_checkpoint(layer):
     """
     Update all instances of type(layer) to use gradient checkpointing.
@@ -167,11 +142,38 @@ for layer in model_old.layers[:6]:
     grad_checkpoint(layer)
 
 
+print(
+    f"Memory consumption: {mx.get_active_memory() / 1024 / 1024:.2f} | {mx.get_peak_memory() / 1024 / 1024:.2f} Megabytes"
+)
+
+
 def salesfores_tool_ds():
     import json
     from datasets import load_dataset
     from data.utils import tool_shuffle
     from utils.tokenizer import TOOL_TEMPLATE
+
+    # K-shot Prompt
+    ws_tool = {
+        "name": "web_search",
+        "description": "Performs a web search for a query and returns a string of the top search results formatted as markdown with titles, links, and descriptions.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "The search query to perform.",
+                }
+            },
+            "required": ["query"],
+        },
+    },
+    k_shot = [
+        {"role": "system", "content": TOOL_TEMPLATE.format(tools=json.dumps(ws_tool)) + " Think before answering."},
+        {"role": "user", "content": "What is the capital of Canada?"},
+        {"role": "assistant", "content":"""<think>The user is asking to know the capital of Canada. I see I have access to 'web_search' tool. So I can use that to find the capital of Canada. 'web_search' tool requires one parameter 'query'. The value for 'query' should be 'The capital of Canada' in this case.</think>\n\n<tool_call>[{"name": "web_search", "arguments": {"query": "The capital of Canada"}}]</tool_call>"""},
+    ]
+
 
     def mapper(data):
         tools = json.loads(data["tools"])
@@ -183,9 +185,11 @@ def salesfores_tool_ds():
         seq = [
             {
                 "role": "system",
-                "content": TOOL_TEMPLATE.format(tools=tool_shuffle(tools)),
+                "content": TOOL_TEMPLATE.format(tools=tool_shuffle(tools)) + " Think before answering.",
             },
             {"role": "user", "content": data["query"]},
+            {"role": "assistant", "content": "<think>"}
+            # Assistant response hidden
             # {'role': 'assistant', 'content': f'<tool_call>{tool_calls}</tool_call>'}
         ]
         return {
@@ -201,7 +205,7 @@ def salesfores_tool_ds():
 
 def total_tokens(data):
     return len(
-        tokenizer.apply_chat_template(data["messages"], add_generation_prompt=True)
+        tokenizer.apply_chat_template(data["messages"], )#add_generation_prompt=True)
     )
 
 
@@ -282,9 +286,6 @@ def binary_scorer(tools_gen, tools_ground, verbose=False):
     except Exception:
         exc_type, exc_obj, exc_tb = sys.exc_info()
         fname = os.path.split(exc_tb.tb_frame.f_code.co_filename)[1]
-        # print("Input attributes were incorrect.", exc_type, fname, exc_tb.tb_lineno)
-        # print(f"TOOLS_GEN: {type(tools_gen)} - {tools_gen}")
-        # print(f"TOOLS_GROUND: {type(tools_ground)} - {tools_ground}")
     return False
 
 
@@ -297,98 +298,32 @@ def _scorer(tools_gen, tools_ground, verbose=False):
         tools_gen = tool_call_extract(tools_gen)
         if verbose:
             print("Parsed toolcall:", type(tools_gen), json.dumps(tools_gen))
+        if tools_gen is None:
+            return -1.0
 
     a = str(tools_gen)
     b = str(tools_ground)
     s = SequenceMatcher(None, a, b)
     return s.ratio() + (s.find_longest_match().size / len(b))
 
-    # total_score = 0
-    # tool_names = {tool["name"]: i for i, tool in enumerate(tools_ground)}
 
-    # def list_match_ratio(list_a, list_b):
-    #     if not list_a or not list_b:
-    #         return 0.0
-    #     total_ratio = 0.0
-    #     for a in list_a:
-    #         best = 0.0
-    #         for b in list_b:
-    #             ratio = SequenceMatcher(None, a, b).ratio()
-    #             if ratio > best:
-    #                 best = ratio
-    #         total_ratio += best
-    #     return (total_ratio - 0.5 * abs(len(a) - len(b))) / len(list_a)
-
-    # def recursive_checker(a, b):
-    #     # a: ground tool_call
-    #     # b: llm gen tool_call
-    #     if type(a) is not type(b):
-    #         return -0.75
-    #     if isinstance(a, str):
-    #         return SequenceMatcher(None, a, b).ratio()  # a.lower() == b.lower()
-    #     elif isinstance(a, list):
-    #         if len(a) > 0 and isinstance(a, list):
-    #             return sum(recursive_checker(aa, bb) for aa, bb in zip(a, b)) / len(a)
-    #         ground_score = len(a)
-    #         score = list_match_ratio(a, b)
-    #         return score / ground_score
-    #     elif isinstance(a, dict):
-    #         ground_score = len(a)
-    #         score = 0
-    #         for ak, av in a.items():
-    #             if ak in b:
-    #                 score += av == b[ak]
-    #         for bk, bv in a.items():
-    #             if bk not in ak:
-    #                 score -= 0.5
-    #         return score / ground_score
-    #     return 0.0
-
-    # # Scoring policy:
-    # # Correct tool = 0.5
-    # # Correct format = 0.25
-    # # Each correct argument key adds value so that the total score leads to
-    # # Each extra argument reduces score by 0.1
-    # # TODO: How to handle multiple calls of same function?
-    # for tool in tools_gen:
-    #     # Match tool name
-    #     if tool["name"] in tool_names:
-    #         arg_score = 0.0
-    #         idx = tool_names[tool["name"]]
-    #         # Not following proper signature would cause 0
-    #         if len(tool.keys()) > 2:
-    #             break
-    #         # Check if any other arguments present except 'arguments'
-    #         # Check inside 'arguments'
-    #         src_args = tool["arguments"]
-    #         grnd_args = tools_ground[idx].get("arguments", {})
-    #         args_set = set()
-
-    #         for k, v in grnd_args.items():
-    #             args_set.add(k)
-    #             if k in src_args:
-    #                 arg_score += recursive_checker(grnd_args[k], src_args[k])
-    #             else:
-    #                 arg_score -= 1
-
-    #         for k, v in src_args.items():
-    #             args_set.add(k)
-    #             if k not in grnd_args:
-    #                 arg_score -= 1
-
-    #         total_score += 0.3 + 0.7 * (arg_score / max(len(args_set), 1e-8))
-    #     else:
-    #         total_score += -0.5
-    # return total_score / len(tool_names) + 0.75
-
-
-def scorer(tools_gen, tools_ground, normalize=False, verbose=False):
+def scorer(llm_gen, tools_ground, normalize=False, verbose=False):
     try:
+        # Get thinking tokens 
+        # Adding prefills
+        llm_gen = "<think>" + llm_gen
+        pattern = re.compile(r"<think>(.*?)</think>", re.DOTALL)
+        think = pattern.findall(llm_gen)
+        if len(think) != 1:
+            return -1.0
+        think = think[0].strip()
+        think_score = -0.5
+        if len(think) > 0:
+            think_score = len(think) / 1024
+        
+        tools_gen = llm_gen[llm_gen.find('</think>')+1:].strip()
         score = _scorer(tools_gen, tools_ground, verbose=verbose)
-        # if normalize:
-            # max_score = _scorer(tools_ground, tools_ground, verbose=verbose)
-            # return max(score / max_score, -1.0)
-        return score
+        return score + think_score
     except Exception:
         exc_type, exc_obj, exc_tb = sys.exc_info()
         fname = os.path.split(exc_tb.tb_frame.f_code.co_filename)[1]
@@ -398,14 +333,14 @@ def scorer(tools_gen, tools_ground, normalize=False, verbose=False):
     return -1.0
 
 
-scorer(
-    # tools_gen=[
-    #     {'name': 'web_search', 'arguments': {'search_str': 'nothing', 'extra': ''}}
-    # ],
-    tools_gen='<tool_call>[{"name": "web_search", "arguments": {"search_str": "mirrorless cameras under $1000 in Canada"}}]</tool_call>',
-    tools_ground=train_ds[0]["ground_tool_call"],
-    verbose=True,
-)
+# scorer(
+#     # tools_gen=[
+#     #     {'name': 'web_search', 'arguments': {'search_str': 'nothing', 'extra': ''}}
+#     # ],
+#     llm_gen='<think></think>\n<tool_call>[{"name": "web_search", "arguments": {"search_str": "mirrorless cameras under $1000 in Canada"}}]</tool_call>',
+#     tools_ground=train_ds[0]["ground_tool_call"],
+#     verbose=True,
+# )
 # tools_ground=[
 #     {'name': 'web_search', 'arguments': {'search_str': 'something'}}
 # ])
@@ -739,7 +674,7 @@ def grpo_train_loop(
 
         for i in batch_indices:
             prompt_tokens = tokenizer.apply_chat_template(
-                train_set[i]["messages"], add_generation_prompt=True, tokenize=True
+                train_set[i]["messages"], add_generation_prompt=False, tokenize=True, continue_final_message=True
             )
             ground_tool_call = train_set[i]["ground_tool_call"]
             tool_call_complexity.append(train_set[i]["num_input_tools"])
@@ -753,26 +688,14 @@ def grpo_train_loop(
                     tokenizer,
                     prompt_tokens,
                     max_tokens=max_ans_len,
-                    sampler=lambda x: mx.random.categorical(x / 1.05, axis=-1),
+                    sampler=lambda x: mx.random.categorical(x / 1, axis=-1), # 1.05
                 )
                 response_hist.append(response)
                 response_tokens = tokenizer.encode(response, add_special_tokens=False)
 
-                if gitr == 0 and it % 20 == 0:
-                    #     print("--- QUESTION ---")
-                    #     print(tokenizer.decode(prompt_tokens))
-                    #     print(len(response_tokens))
-                    print("ITERATION:", it)
-                    print(f"User question: {train_set[i]["messages"][1]['content']}")
-                    print("--- RESPONSE ---")
-                    print(response)
-                    print("--- GROUND ---")
-                    print(f"<tool_call>{json.dumps(ground_tool_call)}</tool_call>")
-                    print()
-
                 # Get normalized reward [-1, 1]
                 reward = scorer(
-                    tools_gen=response,
+                    llm_gen=response,
                     tools_ground=ground_tool_call,
                     normalize=True,
                     verbose=False,
@@ -789,6 +712,17 @@ def grpo_train_loop(
                 full_sequence = mx.array(prompt_tokens + response_tokens)
                 rollout_tokens.append(full_sequence)
                 rollout_a_toks.append(mx.array(response_tokens))
+
+                if gitr == 0 and it % 5 == 0:
+                    print("ITERATION:", it)
+                    print(tokenizer.decode(prompt_tokens))
+                    # print(f"User question: {train_set[i]["messages"][1]['content']}")
+                    print("--- RESPONSE ---")
+                    print(response)
+                    print("--- GROUND ---")
+                    print(f"<tool_call>{json.dumps(ground_tool_call)}</tool_call>")
+                    print("REWARD:", reward)
+                    print()
 
             # print(group_rewards)
             all_rewards.append(np.mean(group_rewards).item())
@@ -845,8 +779,9 @@ def grpo_train_loop(
         learning_rates.append(optimizer.learning_rate.item())
         tot_loss += loss.item()
         if TrainConfig.TQDM:
+            rwds = list(map(lambda x: round(x, 2), all_rewards[-group_size:]))
             pbar.set_description(
-                f"Loss: {losses[-1]:.4f} | {tot_loss/(it+1):.4f} Mean Reward: {tot_avg_score/((it+1)*group_size):.3f} | {tot_max_score/(it+1):.3f} | {tot_binary_reward/(it+1):.3f} Rewards: {all_rewards[-group_size:]}"
+                f"Loss: {losses[-1]:.4f} | {tot_loss/(it+1):.4f} Score: {tot_avg_score/((it+1)*group_size):.2f} | Max {tot_max_score/(it+1):.2f} | Bin {tot_binary_reward/(it+1):.2f} Rewards: {rwds}"
             )
         del grads, clipped_grads, total_norm, loss, policy_reward, kl_div
 

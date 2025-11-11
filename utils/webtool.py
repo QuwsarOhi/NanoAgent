@@ -133,16 +133,15 @@ def tool_parse(tool_call: str):
     {'function_name': 'fun1', 'arguments': {...}}
     {"function_name": "fun1", "arguments": {...}}
     """
-
-    ret = None
     try:
-        ret = literal_eval(tool_call)
-    except Exception:
+        return literal_eval(tool_call)
+    except:
         pass
-
-    # _tool_call = tool_call.replace("'", '"')
-    ret = json.loads(tool_call)
-    return ret
+    try:
+        return json.loads(tool_call)
+    except:
+        pass
+    return None
 
 
 def tool_call_extract(inp_str: str):
