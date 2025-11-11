@@ -1,16 +1,12 @@
-# Reference: https://github.com/searlion/mlx-finetuning/blob/main/MLX%20LM%20GRPO.ipynb
+# References: 
+# https://github.com/searlion/mlx-finetuning/blob/main/MLX%20LM%20GRPO.ipynb
 # https://abderrahmanskiredj.github.io/the-illustrated-grpo/The%20Illustrated%20GRPO.pdf
 
-import copy
 import json
 import os
 import re
-import random
 import sys
-import time
-from collections.abc import Iterable
 from difflib import SequenceMatcher
-from functools import partial
 from pathlib import Path
 
 import matplotlib
@@ -20,15 +16,13 @@ import mlx.nn as nn
 import mlx.optimizers as optim
 import numpy as np
 import tqdm
-from mlx.utils import tree_flatten, tree_map, tree_unflatten
+from mlx.utils import tree_flatten, tree_unflatten
 from mlx_lm import generate, load
-from mlx_lm.tuner import linear_to_lora_layers
-from mlx_lm.tuner.lora import LoRALinear
 from mlx_lm.utils import load_model, save_model
 
 os.environ["TOKENIZERS_PARALLELISM"] = "true"
 plt.ioff()
-matplotlib.use('Agg')
+matplotlib.use("Agg")
 # mx.set_cache_limit(int(1*1024*1024*1024*8) // 2)
 
 from dataclasses import dataclass
@@ -40,7 +34,7 @@ from utils.webtool import tool_call_extract
 @dataclass
 class TrainConfig:
     # Iterations
-    ITERS = 20000
+    ITERS = 15_000
     GENERATE_DATA = False
     BATCH_SIZE = 1
     GEN_LEN = 384
@@ -48,13 +42,13 @@ class TrainConfig:
     # Weight checkpoint
     LOAD_PREV = True
     # Learning rate
-    LEARNING_RATE = 5e-6
+    LEARNING_RATE = 1e-6
     WEIGHT_DECAY = 0.0
     EPSILON = 0.2
-    GROUP_SIZE = 6
+    GROUP_SIZE = 4
     WARMUP_STEPS = int(ITERS * 0.1)
-    BETA = 0.04
-    UPDATE_FREQ = 10
+    BETA = 0  # 0.04
+    UPDATE_WEIGHT = 0.05
     MAX_INPUT_LEN = 384
     SAVE_PATH = "weights/SmolLM2-135M-mlx-grpo-v0"
     DATA_PATH = "data/datasets/grpo_v0.json"
@@ -89,6 +83,7 @@ else:
 
 tokenizer = get_tokenizer("HuggingFaceTB/SmolLM2-135M", add_bos=False)
 
+
 def cosine_decay_with_warmup(
     max_lr: float,
     total_steps: int,
@@ -110,6 +105,7 @@ def cosine_decay_with_warmup(
 
     return schedule
 
+
 scheduler = cosine_decay_with_warmup(
     max_lr=TrainConfig.LEARNING_RATE,
     total_steps=TrainConfig.ITERS // TrainConfig.BATCH_SIZE,
@@ -119,6 +115,7 @@ scheduler = cosine_decay_with_warmup(
 optimizer = optim.AdamW(
     learning_rate=scheduler, betas=[0.9, 0.99], weight_decay=TrainConfig.WEIGHT_DECAY
 )
+
 
 def grad_checkpoint(layer):
     """
@@ -149,31 +146,42 @@ print(
 
 def salesfores_tool_ds():
     import json
+
     from datasets import load_dataset
+
     from data.utils import tool_shuffle
     from utils.tokenizer import TOOL_TEMPLATE
 
     # K-shot Prompt
-    ws_tool = {
-        "name": "web_search",
-        "description": "Performs a web search for a query and returns a string of the top search results formatted as markdown with titles, links, and descriptions.",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "query": {
-                    "type": "string",
-                    "description": "The search query to perform.",
-                }
+    ws_tool = (
+        {
+            "name": "web_search",
+            "description": "Performs a web search for a query and returns a string of the top search results formatted as markdown with titles, links, and descriptions.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "The search query to perform.",
+                    }
+                },
+                "required": ["query"],
             },
-            "required": ["query"],
         },
-    },
+    )
+    # Not being used
     k_shot = [
-        {"role": "system", "content": TOOL_TEMPLATE.format(tools=json.dumps(ws_tool)) + " Think before answering."},
+        {
+            "role": "system",
+            "content": TOOL_TEMPLATE.format(tools=json.dumps(ws_tool))
+            + " Think before answering.",
+        },
         {"role": "user", "content": "What is the capital of Canada?"},
-        {"role": "assistant", "content":"""<think>The user is asking to know the capital of Canada. I see I have access to 'web_search' tool. So I can use that to find the capital of Canada. 'web_search' tool requires one parameter 'query'. The value for 'query' should be 'The capital of Canada' in this case.</think>\n\n<tool_call>[{"name": "web_search", "arguments": {"query": "The capital of Canada"}}]</tool_call>"""},
+        {
+            "role": "assistant",
+            "content": """<think>The user is asking to know the capital of Canada. I see I have access to 'web_search' tool. So I can use that to find the capital of Canada. 'web_search' tool requires one parameter 'query'. The value for 'query' should be 'The capital of Canada' in this case.</think>\n\n<tool_call>[{"name": "web_search", "arguments": {"query": "The capital of Canada"}}]</tool_call>""",
+        },
     ]
-
 
     def mapper(data):
         tools = json.loads(data["tools"])
@@ -185,10 +193,11 @@ def salesfores_tool_ds():
         seq = [
             {
                 "role": "system",
-                "content": TOOL_TEMPLATE.format(tools=tool_shuffle(tools)) + " Think before answering.",
+                "content": TOOL_TEMPLATE.format(tools=tool_shuffle(tools))
+                + " Think before answering.",
             },
             {"role": "user", "content": data["query"]},
-            {"role": "assistant", "content": "<think>"}
+            {"role": "assistant", "content": "<think>"},
             # Assistant response hidden
             # {'role': 'assistant', 'content': f'<tool_call>{tool_calls}</tool_call>'}
         ]
@@ -205,33 +214,15 @@ def salesfores_tool_ds():
 
 def total_tokens(data):
     return len(
-        tokenizer.apply_chat_template(data["messages"], )#add_generation_prompt=True)
+        tokenizer.apply_chat_template(
+            data["messages"],
+        )  # add_generation_prompt=True)
     )
 
 
 def tool_tokens(ground_tool_call):
     ntokens = len(tokenizer.encode(json.dumps(ground_tool_call)))
     return ntokens
-    # return 2 * funcs + params
-
-def complex_tools(tool_data):
-    params = 0
-    funcs = 0
-    ground_tool_call = tool_data['ground_tool_call']
-    for tool in ground_tool_call:
-        for k, v in tool.get("arguments", {}).items():
-            if isinstance(v, (dict, list)):
-                params += 1.75
-            elif isinstance(v, int):
-                params += 1 #1.3
-            elif isinstance(v, str):
-                params += 1
-        
-        funcs += 1
-    n_tool_defs = tool_data['num_input_tools']
-    if (params > 1 or n_tool_defs > 1): # funcs > 1 and 
-        return True
-    return False
 
 
 if TrainConfig.GENERATE_DATA:
@@ -239,30 +230,32 @@ if TrainConfig.GENERATE_DATA:
     train_ds = list(
         filter(
             lambda x: total_tokens(x) < TrainConfig.MAX_INPUT_LEN
-            and tool_tokens(x["ground_tool_call"]) <= TrainConfig.GEN_LEN - 8
-            and complex_tools(x),
-            # and lambda x: len(x['num_input_tools']) > 1,
+            and tool_tokens(x["ground_tool_call"]) <= TrainConfig.GEN_LEN - 8,
             train_ds,
         )
     )
+    train_ds.sort(
+        key=lambda x: (x["num_input_tools"], len(json.dumps(x["ground_tool_call"])))
+    )
+    # Mixing 250 easy samples
+    train_ds = train_ds[:250] + train_ds[-(TrainConfig.ITERS-250):]
     print("New Generated Dataset length:", len(train_ds))
-    # train_ds.sort(key=lambda x: tool_tokens(x['ground_tool_call']))
     with open(TrainConfig.DATA_PATH, "w") as f:
         json.dump(train_ds, f, indent=2)
 else:
     with open(TrainConfig.DATA_PATH, "r") as f:
         train_ds = json.load(f)
-    print(f"Dataset loaded from path: {TrainConfig.DATA_PATH} | Dataset length: {len(train_ds)}")
+    print(
+        f"Dataset loaded from path: {TrainConfig.DATA_PATH} | Dataset length: {len(train_ds)}"
+    )
 
-idx = 6010
-# print(len(tokenizer.encode(json.dumps(train_ds[idx]["ground_tool_call"]))))
-# print(train_ds[idx]["ground_tool_call"])
-# print(tool_complexity(train_ds[idx]["ground_tool_call"]))
+
 print("Input tool distribution:", np.bincount([x["num_input_tools"] for x in train_ds]))
-print("Tool call distribution:", np.bincount([len(x["ground_tool_call"]) for x in train_ds]))
+print(
+    "Tool call distribution:",
+    np.bincount([len(x["ground_tool_call"]) for x in train_ds]),
+)
 
-
-# NOTE: you already have tool_call_extract in your codebase — we still call it if tools_gen is a string.
 
 def _binary_scorer(tools_gen, tools_ground, verbose: bool = False):
     if verbose:
@@ -289,6 +282,19 @@ def binary_scorer(tools_gen, tools_ground, verbose=False):
     return False
 
 
+def validate_format(text):
+    """
+    Validate if the text strictly follows the pattern:
+    <think> ... </think><tool_call> ... </tool_call>
+
+    Returns True if the string matches the pattern, False otherwise.
+    """
+    pattern = re.compile(
+        r"^\s*<think>.*?</think>\s*<tool_call>.*?</tool_call>\s*$", re.DOTALL
+    )
+    return bool(pattern.match(text))
+
+
 def _scorer(tools_gen, tools_ground, verbose=False):
     if verbose:
         print("Gen tools:", type(tools_gen), json.dumps(tools_gen))
@@ -307,43 +313,17 @@ def _scorer(tools_gen, tools_ground, verbose=False):
     return s.ratio() + (s.find_longest_match().size / len(b))
 
 
-def scorer(llm_gen, tools_ground, normalize=False, verbose=False):
-    try:
-        # Get thinking tokens 
-        # Adding prefills
-        llm_gen = "<think>" + llm_gen
-        pattern = re.compile(r"<think>(.*?)</think>", re.DOTALL)
-        think = pattern.findall(llm_gen)
-        if len(think) != 1:
-            return -1.0
-        think = think[0].strip()
-        think_score = -0.5
-        if len(think) > 0:
-            think_score = len(think) / 1024
-        
-        tools_gen = llm_gen[llm_gen.find('</think>')+1:].strip()
-        score = _scorer(tools_gen, tools_ground, verbose=verbose)
-        return score + think_score
-    except Exception:
-        exc_type, exc_obj, exc_tb = sys.exc_info()
-        fname = os.path.split(exc_tb.tb_frame.f_code.co_filename)[1]
-        # print("Input attributes were incorrect.", exc_type, fname, exc_tb.tb_lineno)
-        # print(f"TOOLS_GEN: {type(tools_gen)} - {tools_gen}")
-        # print(f"TOOLS_GROUND: {type(tools_ground)} - {tools_ground}")
-    return -1.0
+def scorer(llm_gen, tools_ground, verbose=False):
+    valid_format = validate_format("<think>" + llm_gen)
+    if not valid_format:
+        return -1
+    gen = tool_call_extract(llm_gen)
+    if gen is None:
+        return -0.5
+    if not isinstance(gen, list):
+        gen = [gen]
+    return _scorer(gen, tools_ground, verbose)
 
-
-# scorer(
-#     # tools_gen=[
-#     #     {'name': 'web_search', 'arguments': {'search_str': 'nothing', 'extra': ''}}
-#     # ],
-#     llm_gen='<think></think>\n<tool_call>[{"name": "web_search", "arguments": {"search_str": "mirrorless cameras under $1000 in Canada"}}]</tool_call>',
-#     tools_ground=train_ds[0]["ground_tool_call"],
-#     verbose=True,
-# )
-# tools_ground=[
-#     {'name': 'web_search', 'arguments': {'search_str': 'something'}}
-# ])
 
 
 def prog_graph(
@@ -360,30 +340,32 @@ def prog_graph(
     save_path=None,
     plot=True,
 ):
-
     plt.close()
     fig, axes = plt.subplots(5, 1, figsize=(18, 12), dpi=600)
     fig.suptitle(f"GRPO Iter: {iter}", fontsize=13)
 
     # GRPO Loss
-    axes[0].plot(np.cumsum(all_losses) / (np.arange(len(all_losses))+1), color="tab:red")
+    axes[0].plot(
+        np.cumsum(all_losses) / (np.arange(len(all_losses)) + 1), color="tab:red"
+    )
     axes[0].set_title("Training Loss")
     axes[0].grid(True)
 
     # All Rewards
-    # axes[1].set_yticks([0.70, 0.75, 0.80, 0.85, 0.90, 0.95, 1.0, 1.5, 2.0])
-    # axes[1].plot(np.cumsum(all_rewards) / (np.arange(len(all_rewards))+1), color="tab:blue")
-    axes[1].plot(np.cumsum(binary_rewards) / (np.arange(len(binary_rewards))+1), color="tab:red")
-    # axes[1].plot(np.cumsum(max_rewards) / (np.arange(len(max_rewards))+1), color="tab:orange")
+    axes[1].plot(
+        np.cumsum(binary_rewards) / (np.arange(len(binary_rewards)) + 1),
+        color="tab:red",
+    )
     axes[1].set_title("Verifier (red)")
     axes[1].grid(True)
 
     # STD Rewards
-    # axes[2].plot(np.cumsum(std_rewards) / (np.arange(len(std_rewards))+1), color="tab:green")
-    # axes[2].set_title("Reward STD")
-    # axes[2].plot(np.cumsum(binary_rewards) / (np.arange(len(binary_rewards))+1), color="tab:red")
-    axes[2].plot(np.cumsum(all_rewards) / (np.arange(len(all_rewards))+1), color="tab:blue")
-    axes[2].plot(np.cumsum(max_rewards) / (np.arange(len(max_rewards))+1), color="tab:orange")
+    axes[2].plot(
+        np.cumsum(all_rewards) / (np.arange(len(all_rewards)) + 1), color="tab:blue"
+    )
+    axes[2].plot(
+        np.cumsum(max_rewards) / (np.arange(len(max_rewards)) + 1), color="tab:orange"
+    )
     axes[2].set_title("All Reward (blue) | Max Reward (orange)")
 
     axes[2].grid(True)
@@ -399,7 +381,6 @@ def prog_graph(
     axes[4].grid(True)
 
     # Remove [0, 1] default ticks on x-axis for bottom graph
-    # axes[2].set_xticks([])
     plt.tight_layout(pad=1)
     if save_path:
         plt.savefig(
@@ -407,9 +388,6 @@ def prog_graph(
         )
     if plot:
         plt.show()
-
-
-# prog_graph(6, losses, all_rewards, max_rewards, [], [], window=20, save_path=None, plot=True)
 
 
 def load_state(path=TrainConfig.SAVE_PATH):
@@ -612,6 +590,27 @@ def pad_sequences(sequences, pad_token_id):
     return mx.stack(padded_sequences)
 
 
+def interpolate_models(past_model: nn.Module, present_model: nn.Module, weight: float):
+    """
+    Linearly interpolate all parameters between two MLX models.
+    """
+    assert 0.0 <= weight <= 1.0, "weight must be in [0, 1]"
+
+    flt_past_model = tree_flatten(past_model)
+    flt_present_model = tree_flatten(present_model)
+    new_weights = []
+
+    # Iterate over all named parameters in both models
+    for (psk, psw), (prk, prw) in zip(flt_past_model, flt_present_model):
+        if isinstance(psw, str):
+            continue
+        assert psk == prk
+        new_weight = psw * (1 - weight) + prw * weight
+        new_weights.append((psk, new_weight))
+
+    return tree_unflatten(new_weights)
+
+
 def grpo_train_loop(
     model,
     model_old,
@@ -674,7 +673,10 @@ def grpo_train_loop(
 
         for i in batch_indices:
             prompt_tokens = tokenizer.apply_chat_template(
-                train_set[i]["messages"], add_generation_prompt=False, tokenize=True, continue_final_message=True
+                train_set[i]["messages"],
+                add_generation_prompt=False,
+                tokenize=True,
+                continue_final_message=True,
             )
             ground_tool_call = train_set[i]["ground_tool_call"]
             tool_call_complexity.append(train_set[i]["num_input_tools"])
@@ -688,22 +690,27 @@ def grpo_train_loop(
                     tokenizer,
                     prompt_tokens,
                     max_tokens=max_ans_len,
-                    sampler=lambda x: mx.random.categorical(x / 1, axis=-1), # 1.05
+                    sampler=lambda x: mx.random.categorical(x / 0.9, axis=-1),  # 1.05
                 )
+
                 response_hist.append(response)
                 response_tokens = tokenizer.encode(response, add_special_tokens=False)
+
+                # Avoiding truncated answers
+                if len(response_tokens) >= max_ans_len - 2:
+                    continue
+
+                # Embedding EOS token as model.generate removes it
+                response_tokens.append(tokenizer.eos_token_id)
 
                 # Get normalized reward [-1, 1]
                 reward = scorer(
                     llm_gen=response,
                     tools_ground=ground_tool_call,
-                    normalize=True,
                     verbose=False,
                 )
                 binary_reward = binary_scorer(
-                    tools_gen=response,
-                    tools_ground=ground_tool_call,
-                    verbose=False
+                    tools_gen=response, tools_ground=ground_tool_call, verbose=False
                 )
                 group_rewards.append(reward)
                 group_binary_reward.append(binary_reward)
@@ -713,16 +720,20 @@ def grpo_train_loop(
                 rollout_tokens.append(full_sequence)
                 rollout_a_toks.append(mx.array(response_tokens))
 
-                if gitr == 0 and it % 5 == 0:
+                if it % 5 == 0:
                     print("ITERATION:", it)
                     print(tokenizer.decode(prompt_tokens))
                     # print(f"User question: {train_set[i]["messages"][1]['content']}")
-                    print("--- RESPONSE ---")
+                    # print("--- RESPONSE ---")
                     print(response)
-                    print("--- GROUND ---")
+                    # print("--- GROUND ---")
                     print(f"<tool_call>{json.dumps(ground_tool_call)}</tool_call>")
                     print("REWARD:", reward)
-                    print()
+                    print('-'*30, flush=True)
+
+            if not group_rewards:
+                print("No valid rewards found in this batch. Skipping...")
+                continue
 
             # print(group_rewards)
             all_rewards.append(np.mean(group_rewards).item())
@@ -732,7 +743,6 @@ def grpo_train_loop(
             max_rewards.append(max(group_rewards))
             tot_max_score += max(group_rewards)
             rollout_rewards.append(mx.array(group_rewards))
-            
 
         # Compute Advantages
         advantages = []
@@ -769,9 +779,7 @@ def grpo_train_loop(
                 print(f"MODEL REPLY: {sc} -> {at}")
             raise NotImplementedError
 
-        clipped_grads, total_norm = optim.clip_grad_norm(
-            grads, max_norm=1.0
-        )
+        clipped_grads, total_norm = optim.clip_grad_norm(grads, max_norm=1.0)
         optimizer.update(model, clipped_grads)
         mx.eval(model.parameters(), optimizer.state)
 
@@ -781,15 +789,16 @@ def grpo_train_loop(
         if TrainConfig.TQDM:
             rwds = list(map(lambda x: round(x, 2), all_rewards[-group_size:]))
             pbar.set_description(
-                f"Loss: {losses[-1]:.4f} | {tot_loss/(it+1):.4f} Score: {tot_avg_score/((it+1)*group_size):.2f} | Max {tot_max_score/(it+1):.2f} | Bin {tot_binary_reward/(it+1):.2f} Rewards: {rwds}"
+                f"Loss: {losses[-1]:.4f} | {tot_loss / (it + 1):.4f} Score: {tot_avg_score / ((it + 1) * group_size):.2f} | Max {tot_max_score / (it + 1):.2f} | Bin {tot_binary_reward / (it + 1):.2f} Rewards: {rwds}"
             )
         del grads, clipped_grads, total_norm, loss, policy_reward, kl_div
 
         # Sync old model weights
-        if update_every is not None and it % update_every == 0:
-            model_old.update(model.parameters())
-            model_old.eval().freeze()
-            # print(f"\nIter {it+1}: Synced old model weights.")
+        # if update_every is not None and it % update_every == 0:
+        new_weights = interpolate_models(model_old, model, TrainConfig.UPDATE_WEIGHT)
+        model_old.update(new_weights)
+        model_old.eval().freeze()
+        # print(f"\nIter {it+1}: Synced old model weights.")
 
         if it % TrainConfig.SAVE_FREQ == 0:
             # prog_graph(losses, max_rewards)
@@ -807,7 +816,7 @@ def grpo_train_loop(
                 optimizer,
                 path=TrainConfig.SAVE_PATH,
             )
-            
+
         if it % 20 == 0:
             prog_graph(
                 it,
@@ -839,7 +848,7 @@ losses, all_rewards, max_rewards = grpo_train_loop(
     optimizer=optimizer,
     train_set=train_ds,
     max_ans_len=TrainConfig.GEN_LEN,
-    update_every=TrainConfig.UPDATE_FREQ,
+    # update_every=TrainConfig.UPDATE_FREQ,
     epsilon=TrainConfig.EPSILON,
     group_size=TrainConfig.GROUP_SIZE,
     beta=TrainConfig.BETA,

@@ -181,3 +181,4 @@ cython_debug/
 .cursorindexingignore
 .DS_Store
 weights/
+data/datasets/

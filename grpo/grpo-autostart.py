@@ -3,14 +3,14 @@ import subprocess
 import time
 
 # Duration to run the command (in seconds)
-RUN_DURATION = 30 * 60
+RUN_DURATION = 60 * 60
 
 while True:
     try:
         start_time = time.time()
         
         # Run the command and capture output in real-time
-        process = subprocess.Popen(["python3", "-m" "grpo.grpo-trl"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        process = subprocess.Popen(["python3", "-m" "grpo.grpo-mlx"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
         
         # Monitor the process for the specified duration
         while time.time() - start_time < RUN_DURATION:
